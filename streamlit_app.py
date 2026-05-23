@@ -1,6 +1,6 @@
 import streamlit as st
-import plotly.graph_objects as go
-import pandas as pd
+from streamlit_folium import st_folium
+import folium
 import time
 
 st.set_page_config(page_title="🕸️ STEEL NET SENTINEL", layout="wide")
@@ -12,161 +12,119 @@ st.sidebar.title("🎮 Kontrola misji")
 attack_btn = st.sidebar.button("🚀 URUCHOM ATAK DRONA", type="primary", use_container_width=True)
 jamming = st.sidebar.checkbox("📡 WŁĄCZ JAMMING (symulacja zakłóceń)", value=False)
 
+# Centrum Stalowej Woli
 center_lat, center_lon = 50.582, 22.053
 
-# Radary
-radars = pd.DataFrame({
-    'lat': [50.620, 50.545, 50.605, 50.565],
-    'lon': [21.985, 22.125, 22.005, 22.105],
-    'name': ['Radar NORTH', 'Radar SOUTH', 'Radar WEST', 'Radar EAST']
-})
+# Radary na obrzeżach
+radars = [
+    {"name": "Radar NORTH", "lat": 50.620, "lon": 21.985},
+    {"name": "Radar SOUTH", "lat": 50.545, "lon": 22.125},
+    {"name": "Radar WEST",  "lat": 50.605, "lon": 22.005},
+    {"name": "Radar EAST",  "lat": 50.565, "lon": 22.105}
+]
 
-# Punkty startu swarmu (straż, policja, wojsko)
-launch_points = pd.DataFrame({
-    'lat': [50.575, 50.590, 50.565],
-    'lon': [22.040, 22.065, 22.020],
-    'name': ['Straż Pożarna', 'Komisariat', 'Jednostka Kryzysowa']
-})
+# Punkty startu swarmu (jednostki kryzysowe)
+launch_points = [
+    {"name": "Straż Pożarna", "lat": 50.575, "lon": 22.040},
+    {"name": "Komisariat",     "lat": 50.590, "lon": 22.065},
+    {"name": "Jednostka Kryzysowa", "lat": 50.565, "lon": 22.020}
+]
 
+# Sesja stanu
 if 'frame' not in st.session_state:
     st.session_state.frame = 0
 if 'running' not in st.session_state:
     st.session_state.running = False
-if 'attacker_path_lat' not in st.session_state:
-    st.session_state.attacker_path_lat = []
-if 'attacker_path_lon' not in st.session_state:
-    st.session_state.attacker_path_lon = []
 
-fig = go.Figure()
+# === TWORZENIE MAPY ===
+m = folium.Map(location=[center_lat, center_lon], zoom_start=13, tiles="OpenStreetMap")
 
+# Radary (statyczne + podświetlenie)
+for i, r in enumerate(radars):
+    color = "lime" if (st.session_state.running and st.session_state.frame > 5 and i == 0) else "red"
+    folium.CircleMarker(
+        location=[r["lat"], r["lon"]],
+        radius=15,
+        color=color,
+        fill=True,
+        popup=r["name"]
+    ).add_to(m)
+
+# Punkty startu swarmu
+for p in launch_points:
+    folium.Marker(
+        location=[p["lat"], p["lon"]],
+        popup=p["name"],
+        icon=folium.Icon(color="blue", icon="star")
+    ).add_to(m)
+
+# === JEŚLI SYMULACJA DZIAŁA ===
 if attack_btn or st.session_state.running:
     st.session_state.running = True
     frame = st.session_state.frame
 
-    # === TRAJEKTORIA ATAKUJĄCEGO DRONA ===
+    # Dron atakujący (ruch po linii)
     attacker_lat = 50.620 - (50.620 - 50.582) * (frame / 35)
     attacker_lon = 21.985 + (22.053 - 21.985) * (frame / 35)
-    
-    st.session_state.attacker_path_lat.append(attacker_lat)
-    st.session_state.attacker_path_lon.append(attacker_lon)
 
-    # Przewidywana trajektoria (dashed line)
-    pred_lats = [attacker_lat, 50.582]
-    pred_lons = [attacker_lon, 22.053]
+    # Marker drona
+    folium.Marker(
+        location=[attacker_lat, attacker_lon],
+        popup="Dron atakujący",
+        icon=folium.Icon(color="red", icon="plane")
+    ).add_to(m)
 
-    # Swarm startuje od frame 12
-    swarm_active = frame >= 12
+    # Przewidywana trajektoria (linia)
+    folium.PolyLine(
+        locations=[[attacker_lat, attacker_lon], [50.582, 22.053]],
+        color="orange",
+        weight=4,
+        dash_array="10, 10",
+        popup="Przewidywana trajektoria"
+    ).add_to(m)
 
-    # === GŁÓWNA FIGURA ===
-    # 1. Ścieżka drona (historia)
-    fig.add_trace(go.Scattermapbox(
-        lat=st.session_state.attacker_path_lat,
-        lon=st.session_state.attacker_path_lon,
-        mode='lines',
-        line=dict(width=5, color='red'),
-        name='Dron atakujący (ścieżka)'
-    ))
-
-    # 2. Aktualna pozycja drona (marker)
-    fig.add_trace(go.Scattermapbox(
-        lat=[attacker_lat], lon=[attacker_lon],
-        mode='markers',
-        marker=dict(size=18, color='red', symbol='circle'),
-        name='Dron atakujący'
-    ))
-
-    # 3. Przewidywana trajektoria
-    fig.add_trace(go.Scattermapbox(
-        lat=pred_lats, lon=pred_lons,
-        mode='lines',
-        line=dict(width=3, color='orange', dash='dash'),
-        name='Przewidywana trajektoria'
-    ))
-
-    # 4. Radary (podświetlamy wykryty)
-    detected_idx = 0 if frame > 5 else -1
-    radar_colors = ['lime' if i == detected_idx else 'darkred' for i in range(len(radars))]
-    fig.add_trace(go.Scattermapbox(
-        lat=radars['lat'], lon=radars['lon'],
-        mode='markers+text',
-        marker=dict(size=22, color=radar_colors, symbol='square'),
-        text=radars['name'], textposition='top center',
-        name='Radary'
-    ))
-
-    # 5. Punkty startu swarmu
-    fig.add_trace(go.Scattermapbox(
-        lat=launch_points['lat'], lon=launch_points['lon'],
-        mode='markers+text',
-        marker=dict(size=16, color='blue', symbol='star'),
-        text=launch_points['name'], textposition='bottom center',
-        name='Punkty startu swarmu'
-    ))
-
-    # 6. Swarm + siatka (jeśli aktywny)
-    if swarm_active:
+    # Swarm + siatka (od frame 12)
+    if frame >= 12:
         for i in range(6):
             t = min(1.0, (frame - 12) / 20)
-            inter_lat = launch_points.iloc[i % 3]['lat'] + (attacker_lat - launch_points.iloc[i % 3]['lat']) * t
-            inter_lon = launch_points.iloc[i % 3]['lon'] + (attacker_lon - launch_points.iloc[i % 3]['lon']) * t
-            
-            fig.add_trace(go.Scattermapbox(
-                lat=[inter_lat], lon=[inter_lon],
-                mode='markers',
-                marker=dict(size=14, color='lime', symbol='triangle-up'),
-                name=f'Interceptor {i+1}'
-            ))
-            
+            inter_lat = launch_points[i % 3]["lat"] + (attacker_lat - launch_points[i % 3]["lat"]) * t
+            inter_lon = launch_points[i % 3]["lon"] + (attacker_lon - launch_points[i % 3]["lon"]) * t
+
+            folium.Marker(
+                location=[inter_lat, inter_lon],
+                icon=folium.Icon(color="green", icon="arrow-up")
+            ).add_to(m)
+
             # Linie siatki
             if i > 0:
-                prev_lat = launch_points.iloc[(i-1) % 3]['lat'] + (attacker_lat - launch_points.iloc[(i-1) % 3]['lat']) * t
-                prev_lon = launch_points.iloc[(i-1) % 3]['lon'] + (attacker_lon - launch_points.iloc[(i-1) % 3]['lon']) * t
-                fig.add_trace(go.Scattermapbox(
-                    lat=[inter_lat, prev_lat], lon=[inter_lon, prev_lon],
-                    mode='lines',
-                    line=dict(width=3.5, color='cyan'),
-                    name='Siatka'
-                ))
-
-    fig.update_layout(
-        mapbox=dict(style="open-street-map", center=dict(lat=center_lat, lon=center_lon), zoom=12.5),
-        margin=dict(l=0, r=0, t=0, b=0),
-        height=650,
-        showlegend=True,
-        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
-    )
-
-    st.plotly_chart(fig, use_container_width=True, key=f"sim_{frame}")
+                prev_lat = launch_points[(i-1) % 3]["lat"] + (attacker_lat - launch_points[(i-1) % 3]["lat"]) * t
+                prev_lon = launch_points[(i-1) % 3]["lon"] + (attacker_lon - launch_points[(i-1) % 3]["lon"]) * t
+                folium.PolyLine(
+                    locations=[[inter_lat, inter_lon], [prev_lat, prev_lon]],
+                    color="cyan",
+                    weight=5
+                ).add_to(m)
 
     # Statusy
-    col1, col2, col3 = st.columns(3)
-    with col1: st.metric("Radar wykrył", "RADAR NORTH" if frame > 5 else "—", "w 3.2s")
-    with col2: st.metric("Swarm aktywny", "TAK" if swarm_active else "NIE", f"frame {frame}")
-    with col3: st.metric("Czas do interceptu", f"{max(0, 35-frame)}s")
-
+    st.info(f"🔴 Symulacja w toku – frame {frame}/40 | Dron w drodze...")
     if jamming:
-        st.warning("📡 JAMMING AKTYWNY – system przełączył się na on-board AI prediction")
+        st.warning("📡 JAMMING AKTYWNY – system na on-board AI prediction!")
+
+    # Render mapy
+    st_folium(m, width=900, height=650, returned_objects=[])
 
     st.session_state.frame += 1
     if st.session_state.frame < 40:
-        time.sleep(0.22)
+        time.sleep(0.25)
         st.rerun()
     else:
         st.success("✅ SIATKA ZAMKNIĘTA! Cel przechwycony 800 m przed infrastrukturą krytyczną.")
         st.balloons()
         st.session_state.running = False
         st.session_state.frame = 0
-        st.session_state.attacker_path_lat = []
-        st.session_state.attacker_path_lon = []
 
 else:
-    # Startowa mapa
-    empty_fig = go.Figure()
-    empty_fig.update_layout(
-        mapbox=dict(style="open-street-map", center=dict(lat=center_lat, lon=center_lon), zoom=12.5),
-        margin=dict(l=0, r=0, t=30, b=0),
-        height=650
-    )
-    st.plotly_chart(empty_fig, use_container_width=True)
+    # Startowa mapa (zawsze pokazuje mapę Stalowej Woli)
+    st_folium(m, width=900, height=650, returned_objects=[])
 
-st.caption("Steel Net Sentinel • SpaceShield Hack 2026 • DEFENCE • Real-time symulacja przechwycenia drona")
+st.caption("Steel Net Sentinel • SpaceShield Hack 2026 • DEFENCE track • Real-time symulacja")
